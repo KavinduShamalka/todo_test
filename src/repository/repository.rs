@@ -1,4 +1,4 @@
-use std::{env, collections::HashMap};
+use std::env;
 extern crate dotenv;
 use actix_web::{
     HttpResponse, cookie::Cookie,
@@ -7,18 +7,18 @@ use actix_web::{
 use chrono::{Utc, Duration};
 use dotenv::dotenv;
 
+use futures::StreamExt;
 use jsonwebtoken::{encode, Header, EncodingKey, decode, DecodingKey, Validation, Algorithm};
-use mongodb::{Collection, Client, results::InsertOneResult, bson::doc};
+use mongodb::{Collection, Client, results::{InsertOneResult, UpdateResult, DeleteResult}, bson::{doc, oid::ObjectId, extjson::de::Error}};
 use serde_json::json;
 
-use crate::models::models::{User, Todos, ErrorResponse, LoginSchema, TokenClaims, TodoList};
-
+use crate::models::models::{User, Todos, ErrorResponse, LoginSchema, TokenClaims};
 
 
 #[derive(Debug, Clone)]
 pub struct MongoRepo {
     user: Collection<User>,
-    todo: Collection<TodoList>
+    todo: Collection<Todos>
 }
 
 impl MongoRepo {
@@ -82,7 +82,6 @@ impl MongoRepo {
                     name: new_user.name,
                     email: new_user.email,
                     password: new_user.password,
-                    todo_list: None
                 };
 
                 let user = self
@@ -170,25 +169,24 @@ impl MongoRepo {
 
                     let id = decoded.claims.sub;
 
-                    // let bson_id = ObjectId::parse_str(id).unwrap();
-
                     let todos = Todos {
                         id: None,
+                        uid: Some(id),
                         description: new_todo.description,
-                        created_at: None
+                        created_at: Some(Utc::now())
                     };
 
-                    // Create a HashMap and insert the new_todo into it
-                    let mut list = HashMap::new();
-                    list.insert(id, todos);
+                    // // Create a HashMap and insert the new_todo into it
+                    // let mut list = HashMap::new();
+                    // list.insert(id, todos);
 
-                    let doc = TodoList {
-                        list,
-                    };
+                    // let doc = TodoList {
+                    //     list,
+                    // };
 
                     let todo = self
                         .todo
-                        .insert_one( doc, None)
+                        .insert_one( todos, None)
                         .await.ok()
                         .expect("Error finding");
 
@@ -205,13 +203,193 @@ impl MongoRepo {
         }
 
 
-        // //Get all todos
-        // pub async fn getall_todos(&self, token : &str, todo_id: String) -> HttpResponse {
+        //Get all todos
+        pub async fn getall_todos(&self, token: &str) -> Result<Vec<Todos>, ErrorResponse> {
+
+            let secret_key = "secret".to_owned();
+
+            let var = secret_key;
+            let key = var.as_bytes();
+            let decode = decode::<TokenClaims> (
+                token,
+                &DecodingKey::from_secret(key),
+                &Validation::new(Algorithm::HS256),
+            ); 
+
+            match decode {
+                Ok(decoded) => {
+
+                    let id = decoded.claims.sub.to_owned();
+
+                    let doc = doc! {
+                        "_uid": id
+                    };
+
+                    let mut todo = self
+                        .todo
+                        .find(doc, None)
+                        .await
+                        .ok()
+                        .expect("Error finding todos");
+
+                    let mut todo_vec = Vec::new();
+
+                    while let Some(doc) = todo.next().await {
+
+                        println!("Hiiii {:?}", doc);
+
+                        match doc {
+                            Ok(todo) => {
+                                todo_vec.push(todo)
+                            },
+                            Err(err) => {
+                                eprintln!("Error finding todo: {:?}", err)
+                            },
+                        }
+                    }
+
+                    println!("{:?}", todo_vec);
+
+                    Ok(todo_vec)
+                    
+                }
+                Err(_) =>  Err(ErrorResponse {
+                    status: false,
+                    message: "Invalid Token".to_string(),
+                }),
+            }
+
+        }
 
 
+        //Update todo
+        pub async fn update_todo(&self, token: &str, todo_list: Todos, todo_id: String ) -> Result<UpdateResult, ErrorResponse> {
 
-        // }
+            let secret_key = "secret".to_owned();
 
+            let var = secret_key;
+            let key = var.as_bytes();
+            let decode = decode::<TokenClaims> (
+                token,
+                &DecodingKey::from_secret(key),
+                &Validation::new(Algorithm::HS256),
+            ); 
+
+            match decode {
+
+                Ok(decoded) => {
+
+                    println!("object_id{:?}", decoded.claims.sub.to_owned());
+
+                    let id = decoded.claims.sub;
+
+                    let bson_id = ObjectId::parse_str(todo_id).unwrap();
+
+                    match self.finding_todo(&id, &bson_id).await.unwrap() {
+
+                        Some(_) => {
+
+                            let filter = doc! {"_id": bson_id};
+        
+                            let new_doc = doc! {
+                                "$set":
+                                    {
+                                        "description": todo_list.description
+                                    },
+                            };
+                            let updated_doc = self
+                                .todo
+                                .update_one(filter, new_doc, None)
+                                .await
+                                .ok()
+                                .expect("Error updating todo");
+                    
+                            Ok(updated_doc)
+                        },
+                        None => {
+                            return Err(ErrorResponse {
+                                    message: "Todo Not found".to_owned(),
+                                    status: false
+                            })
+                        }
+                    }
+                }
+                Err(_) => Err(ErrorResponse {
+                    status: false,
+                    message: "Invalid Token".to_string(),
+                }),
+            }
+
+        }
+
+        //Delete todo
+        pub async fn delete_todo(&self, token: &str, todo_id: String ) -> Result<DeleteResult, ErrorResponse> {
+
+            let secret_key = "secret".to_owned();
+
+            let var = secret_key;
+            let key = var.as_bytes();
+            let decode = decode::<TokenClaims> (
+                token,
+                &DecodingKey::from_secret(key),
+                &Validation::new(Algorithm::HS256),
+            ); 
+    
+            match decode {
+
+                Ok(decoded) => {
+
+                    println!("object_id{:?}", decoded.claims.sub.to_owned());
+
+                    let id = decoded.claims.sub;
+
+                    let bson_id = ObjectId::parse_str(&todo_id).unwrap();
+
+                    match self.finding_todo(&id, &bson_id).await.unwrap() {
+
+                        Some(_) => {
+
+                            let filter = doc! {"_id": bson_id};
+
+                            let delete = self
+                                .todo
+                                .delete_one(filter, None)
+                                .await
+                                .ok()
+                                .expect("Error deleting todos");
+                            
+                            Ok(delete)
+                        },
+                        None => {
+                            return Err(ErrorResponse {
+                                    message: "Todo Not found".to_owned(),
+                                    status: false
+                            })
+                        }
+                    }
+
+                },
+                Err(_) => Err(ErrorResponse {
+                    status: false,
+                    message: "Invalid Token".to_string(),
+                }),
+            }
+        }
+
+        //finding todo
+        pub async fn finding_todo(&self, user_id: &String, todo_id: &ObjectId) -> Result<Option<Todos>, Error> {
+
+            let todo = self
+                .todo
+                .find_one(doc! {
+                    "_id" : todo_id,
+                    "_uid" : user_id
+                }, None)
+                .await.ok()
+                .expect("Error finding todo");
+
+            Ok(todo)
+        }
 
 
 }

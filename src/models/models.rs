@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use mongodb::bson::oid::ObjectId;
 use serde::{Deserialize, Serialize};
 use chrono::prelude::*;
@@ -12,8 +10,6 @@ pub struct User {
     pub name: String,
     pub email: String,
     pub password: String,
-    #[serde(rename = "_todolist", skip_serializing_if = "Option::is_none")]
-    pub todo_list: Option<ObjectId>
 }
 
 //Todo structure
@@ -21,6 +17,8 @@ pub struct User {
 pub struct Todos {
     #[serde(rename = "_id", skip_serializing_if = "Option::is_none")]
     pub id: Option<ObjectId>,
+    #[serde(rename = "_uid", skip_serializing_if = "Option::is_none")]
+    pub uid: Option<String>,
     pub description: String,
     #[serde(rename = "_createdAt", skip_serializing_if = "Option::is_none")]
     pub created_at: Option<DateTime<Utc>>,
@@ -29,7 +27,7 @@ pub struct Todos {
 //Todo list structure
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TodoList {
-    pub list: HashMap<String, Todos>
+    pub list: Vec<Todos>
 }
 
 //User login schema
